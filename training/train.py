@@ -16,21 +16,31 @@ features = ['total_precipitation_sum', 'temperature_c', 'dewpoint_c']
 X_features = data[features].values
 y_labels = data['label'].values
 
+pre_data = train_test_split(X_features, y_labels, test_size=0.15, random_state=42)
+X_temp = pre_data[0]
+X_test = pre_data[1]
+y_temp = pre_data[2]
+y_test = pre_data[3]
+
 # Train/Test Split & Normalization
-all_data = train_test_split(X_features, y_labels, test_size=0.2, random_state=42)
-# Produces [X_train, X_test, y_train, y_test]
+all_data = train_test_split(X_temp, y_temp, test_size=0.15/0.85, random_state=42)
+# Produces [X_train, X_test, y_train, y_val]
 X_train = all_data[0]
-X_test = all_data[1]
+X_val = all_data[1]
 y_train = all_data[2]
-y_test = all_data[3]
+y_val = all_data[3]
 
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
+X_val_scaled = scaler.transform(X_val)
 X_test_scaled = scaler.transform(X_test)
 
 # Convert to PyTorch tensors
 X_train_tensor = torch.FloatTensor(X_train_scaled)
 y_train_tensor = torch.FloatTensor(y_train).view(-1, 1)
+
+X_val_tensor = torch.FloatTensor(X_val_scaled)
+y_val_tensor = torch.FloatTensor(y_val).view(-1,1)
 
 X_test_tensor = torch.FloatTensor(X_test_scaled)
 y_test_tensor = torch.FloatTensor(y_test).view(-1, 1)
@@ -68,15 +78,21 @@ for epoch in range(epochs):
     optimizer.zero_grad()
 
     # Forward Pass
-    outputs = model(X_train_tensor)
-    loss = criterion(outputs, y_train_tensor)
+    train_outputs = model(X_train_tensor)
+    train_loss = criterion(train_outputs, y_train_tensor)
 
     # Backward pass and gradient step
-    loss.backward()
+    train_loss.backward()
     optimizer.step()
 
+    # Validation
+    model.eval()
+    with torch.no_grad():
+        val_outputs = model(X_val_tensor)
+        val_loss = criterion(val_outputs, y_val_tensor)
+
     if (epoch + 1) % 10 == 0:
-        print(f"Epoch [{epoch + 1}/ {epochs}] | Train Loss: {loss.item():.4f}")
+        print(f"Epoch [{epoch+1}/{epochs}] | Train Loss: {train_loss.item():.4f} | Val Loss: {val_loss.item():.4f}")
 
 # Model Evaluating
 model.eval()
