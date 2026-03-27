@@ -36,3 +36,15 @@ Actual 1 (Fire)      | 129         | 3321
      No Fire       0.96      0.99      0.98      3261
         Fire       0.99      0.96      0.98      3450
 ```
+
+To ensure the model is performing without any overfitting on the datasets, I introduce another test on never-seen-before data, i.e, 2025 BC Wildfire information. Following the same pre-processing steps to introduce weather features to the data, I run the 2025 all-fire dataset through the already-trained model, and achieve these results:
+
+```
+============================================
+      2025 ALL-FIRE DATASET EVALUATION    
+============================================
+Total Actual Fires Evaluated        : 1378
+Model Predicted as 'Fire' (1)       : 1310
+Model Predicted as 'No Fire' (0)    : 68
+Recall (Accuracy on Fires)          : 95.07%
+```
