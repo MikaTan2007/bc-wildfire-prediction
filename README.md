@@ -16,6 +16,7 @@ The data is fed into the neural network into a standard train/test/validation sp
 
 These are the following results:
 
+```
 ==================================================
         BC WILDFIRE MODEL CONFUSION MATRIX        
 ==================================================
@@ -34,3 +35,4 @@ Actual 1 (Fire)      | 129         | 3321
 
      No Fire       0.96      0.99      0.98      3261
         Fire       0.99      0.96      0.98      3450
+```
