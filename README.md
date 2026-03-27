@@ -37,7 +37,7 @@ Actual 1 (Fire)      | 129         | 3321
         Fire       0.99      0.96      0.98      3450
 ```
 
-To ensure the model is performing without any overfitting on the datasets, I introduce another test on never-seen-before data, i.e, 2025 BC Wildfire information. Following the same pre-processing steps to introduce weather features to the data, I run the 2025 all-fire dataset through the already-trained model, and achieve these results:
+To ensure the model is performing without any overfitting on the datasets, I introduce another test on never-seen-before data, i.e, 2025 BC Wildfire information which was not included in the train/test/validation dataset. Following the same pre-processing steps to introduce weather features to the data, I run the 2025 all-fire dataset through the already-trained model, and achieve these results:
 
 ```
 ============================================
