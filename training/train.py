@@ -54,9 +54,9 @@ print(f"Using device: {device}")
 class WildfireClassifier(nn.Module):
     def __init__(self, input_dim):
         super(WildfireClassifier, self).__init__()
-        self.layer1 = nn.Linear(input_dim, 20)
-        self.layer2 = nn.Linear(20, 10)
-        self.layer3 = nn.Linear(10, 1) # We output to a single node for binary classification
+        self.layer1 = nn.Linear(input_dim, 16)
+        self.layer2 = nn.Linear(16, 8)
+        self.layer3 = nn.Linear(8, 1) # We output to a single node for binary classification
         self.relu = nn.ReLU()
     
     def forward(self, x):
@@ -73,7 +73,7 @@ criterion = nn.BCEWithLogitsLoss()
 optimizer = optim.Adam(model.parameters(), lr = 0.01)
 
 # Training Loop
-epochs = 1500
+epochs = 3000
 
 print(f"Starting training loop with {epochs} epochs")
 
@@ -135,21 +135,23 @@ cm = confusion_matrix(y_true_numpy, y_pred_numpy)
 
 tn, fp, fn, tp = cm.ravel()
 
-print("\n" + "="*45)
-print("BC WILDFIRE MODEL CONFUSION MATRIX".center(45))
-print("="*45)
+print("\n" + "="*50)
+print("BC WILDFIRE MODEL CONFUSION MATRIX".center(50))
+print("="*50)
 print(f"{'':<20} | {'Predicted 0':<10} | {'Predicted 1':<10}")
 print(f"{'':<20} | {'(No Fire)':<10}  | {'(Fire)':<10}")
-print("-"*45)
+print("-"*50)
 print(f"{'Actual 0 (No Fire)':<20} | {tn:<10}  | {fp:<10}")
-print("-"*45)
+print("-"*50)
 print(f"{'Actual 1 (Fire)':<20} | {fn:<10}  | {tp:<10}")
-print("="*45)
+print("="*50)
 
+print("\n")
 
 # Prediction, Recall, and F1 Score
-print("Classification Report")
-print("="*45)
+print("="*53)
+print("Classification Report".center(53))
+print("="*53)
 print(classification_report(y_true_numpy, y_pred_numpy, target_names=["No Fire", "Fire"]))
 
 # Saving model weights
