@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+import joblib
 
 # Loading Data
 data = pd.read_csv("bc_fire_ml_dataset.csv")
@@ -53,9 +54,9 @@ print(f"Using device: {device}")
 class WildfireClassifier(nn.Module):
     def __init__(self, input_dim):
         super(WildfireClassifier, self).__init__()
-        self.layer1 = nn.Linear(input_dim, 16)
-        self.layer2 = nn.Linear(16, 8)
-        self.layer3 = nn.Linear(8, 1) # We output to a single node for binary classification
+        self.layer1 = nn.Linear(input_dim, 20)
+        self.layer2 = nn.Linear(20, 10)
+        self.layer3 = nn.Linear(10, 1) # We output to a single node for binary classification
         self.relu = nn.ReLU()
     
     def forward(self, x):
@@ -72,7 +73,7 @@ criterion = nn.BCEWithLogitsLoss()
 optimizer = optim.Adam(model.parameters(), lr = 0.01)
 
 # Training Loop
-epochs = 1000
+epochs = 1500
 
 print(f"Starting training loop with {epochs} epochs")
 
@@ -150,3 +151,13 @@ print("="*45)
 print("Classification Report")
 print("="*45)
 print(classification_report(y_true_numpy, y_pred_numpy, target_names=["No Fire", "Fire"]))
+
+# Saving model weights
+model_weight_save_path = "wildfire_model.pth"
+torch.save(model.state_dict(), model_weight_save_path)
+print(f"Model weights saved to {model_weight_save_path}")
+
+# Saving standard scalar
+scaler_save_path = "scaler.joblib"
+joblib.dump(scaler, scaler_save_path)
+print(f"Standard Scaler saved to {scaler_save_path}")
