@@ -14,7 +14,7 @@ I generate 22619 random points in BC over a landmasked area between the months o
 
 The data is fed into the neural network into a standard train/test/validation split of 70/15/15. We have 3 layers, going from 16 -> 8 -> 1 nodes, applying a ReLU activation function after each layer. The training epoch is 3000.
 
-These are the following results:
+These are the following results for the prediction model trained on weather features taken from the same day as the wildfire.
 
 ```
 ==================================================
