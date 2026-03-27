@@ -45,6 +45,10 @@ y_val_tensor = torch.FloatTensor(y_val).view(-1,1)
 X_test_tensor = torch.FloatTensor(X_test_scaled)
 y_test_tensor = torch.FloatTensor(y_test).view(-1, 1)
 
+# Checking if MPS is available
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+print(f"Using device: {device}")
+
 # Neural Network Architecture
 class WildfireClassifier(nn.Module):
     def __init__(self, input_dim):
@@ -61,6 +65,7 @@ class WildfireClassifier(nn.Module):
         return x
 
 model = WildfireClassifier(len(features))
+model.to(device)
 
 # Defining Loss and Optimizer
 criterion = nn.BCEWithLogitsLoss()
@@ -73,13 +78,15 @@ print(f"Starting training loop with {epochs} epochs")
 
 for epoch in range(epochs):
     model.train()
-
     # Resetting Gradients
     optimizer.zero_grad()
 
+    inputs = X_train_tensor.to(device)
+    labels = y_train_tensor.to(device)
+
     # Forward Pass
-    train_outputs = model(X_train_tensor)
-    train_loss = criterion(train_outputs, y_train_tensor)
+    train_outputs = model(inputs)
+    train_loss = criterion(train_outputs, labels)
 
     # Backward pass and gradient step
     train_loss.backward()
@@ -88,8 +95,11 @@ for epoch in range(epochs):
     # Validation
     model.eval()
     with torch.no_grad():
-        val_outputs = model(X_val_tensor)
-        val_loss = criterion(val_outputs, y_val_tensor)
+        val_inputs = X_val_tensor.to(device)
+        val_labels = y_val_tensor.to(device)
+
+        val_outputs = model(val_inputs)
+        val_loss = criterion(val_outputs, val_labels)
 
     if (epoch + 1) % 10 == 0:
         print(f"Epoch [{epoch+1}/{epochs}] | Train Loss: {train_loss.item():.4f} | Val Loss: {val_loss.item():.4f}")
@@ -98,9 +108,12 @@ for epoch in range(epochs):
 model.eval()
 
 with torch.no_grad():
-    test_outputs = model(X_test_tensor)
+    inputs = X_test_tensor.to(device)
+
+    test_outputs = model(inputs)
+
     # Convert logits to probabilities using Sigmoid
-    probs = torch.sigmoid(test_outputs)
+    probs = torch.sigmoid(test_outputs.cpu())
 
     predictions = (probs >= 0.5).float()
 
@@ -114,8 +127,8 @@ with torch.no_grad():
 # Confusion Matrix
 from sklearn.metrics import confusion_matrix, classification_report
 
-y_pred_numpy = predictions.numpy()
-y_true_numpy = y_test_tensor.numpy()
+y_pred_numpy = predictions.cpu().numpy()
+y_true_numpy = y_test_tensor.cpu().numpy()
 
 cm = confusion_matrix(y_true_numpy, y_pred_numpy)
 
