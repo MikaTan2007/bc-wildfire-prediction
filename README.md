@@ -48,3 +48,32 @@ Model Predicted as 'Fire' (1)       : 1310
 Model Predicted as 'No Fire' (0)    : 68
 Recall (Accuracy on Fires)          : 95.07%
 ```
+
+I then decide to train the model on the weather features three days before the wildfire, producing the following results:
+
+```
+==================================================
+        BC WILDFIRE MODEL CONFUSION MATRIX        
+==================================================
+                     | Predicted 0 | Predicted 1
+                     | (No Fire)   | (Fire)    
+--------------------------------------------------
+Actual 0 (No Fire)   | 3278        | 49        
+--------------------------------------------------
+Actual 1 (Fire)      | 164         | 3220      
+==================================================
+```
+
+```
+=====================================================
+                Classification Report                
+=====================================================
+              precision    recall  f1-score   support
+
+     No Fire       0.95      0.99      0.97      3327
+        Fire       0.99      0.95      0.97      3384
+
+    accuracy                           0.97      6711
+   macro avg       0.97      0.97      0.97      6711
+weighted avg       0.97      0.97      0.97      6711
+```
