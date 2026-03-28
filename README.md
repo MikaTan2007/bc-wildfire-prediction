@@ -77,3 +77,16 @@ Actual 1 (Fire)      | 164         | 3220
    macro avg       0.97      0.97      0.97      6711
 weighted avg       0.97      0.97      0.97      6711
 ```
+
+And then when evaluated on the 2025 not-seen-before dataset, I get the following results:
+```
+=========================================
+      2025 ALL-FIRE DATASET EVALUATION    
+=========================================
+Total Actual Fires Evaluated : 1378
+Model Predicted as 'Fire'    : 1305
+Model Predicted as 'No Fire' : 73
+Recall (Accuracy on Fires)   : 94.70%
+```
+
+This shows that there is a clear relationship between weather patterns three days prior to fires, meaning that the model can predict wildfires based on conditions three-days before they occur.
