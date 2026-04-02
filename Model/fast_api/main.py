@@ -25,7 +25,7 @@ GRID_COLS = 40
 WEATHER_BATCH_SIZE = 10
 WEATHER_MAX_RETRIES = 5
 WEATHER_BASE_BACKOFF_SEC = 0.5
-WEATHER_BATCH_PAUSE_SEC = 0.3
+WEATHER_BATCH_PAUSE_SEC = 0.5
 
 # Neural Network Architecture
 class WildfireClassifier(nn.Module):
@@ -81,6 +81,22 @@ class GridWeatherResponse(BaseModel):
     cell_count: int
     weather_source: str
     cells: List[GridWeather]
+
+class GridPrediction(BaseModel):
+    grid_id: str
+    centroid: GridPoint
+    precipitation: float
+    temperature: float
+    dewpoint: float
+    fire_probability: float
+    risk_level: str
+
+class GridPredictionResponse(BaseModel):
+    generated_at: str
+    cell_count: int
+    prediction_window: str
+    weather_source: str
+    cells: List[GridPrediction]
 
 def generate_bc_grid(rows: int = GRID_ROWS, cols: int = GRID_COLS) -> List[GridCell]:
     lat_step = (BC_MAX_LAT - BC_MIN_LAT) / rows
@@ -183,6 +199,7 @@ async def get_grid():
     )
 
 # Fetching Weather Per Point
+
 async def fetch_weather_for_batch(client: httpx.AsyncClient, batch: List[GridCell]) -> List[GridWeather]:
     lat_csv = ",".join(str(cell.centroid.lat) for cell in batch)
     lon_csv = ",".join(str(cell.centroid.lon) for cell in batch)
@@ -281,7 +298,99 @@ async def get_grid_weather():
         weather_source="open-meteo",
         cells=enriched,
     )
-    
+
+# Add this helper function (for shared batch inference)
+
+def run_batch_inference(weather_rows: List[GridWeather]) -> List[GridPrediction]:
+    model = ml_assets["model"]
+    scaler = ml_assets["scaler"]
+    device = ml_assets["device"]
+
+    raw_features = np.array(
+        [[w.precipitation, w.temperature, w.dewpoint] for w in weather_rows],
+        dtype=np.float32
+    )
+
+    scaled_features = scaler.transform(raw_features)
+    input_tensor = torch.FloatTensor(scaled_features).to(device)
+
+    with torch.no_grad():
+        logits = model(input_tensor)
+        probabilities = torch.sigmoid(logits).cpu().numpy().reshape(-1)
+
+    output: List[GridPrediction] = []
+    for w, prob in zip(weather_rows, probabilities):
+        risk = "High" if prob > 0.75 else "Moderate" if prob > 0.4 else "Low"
+        output.append(
+            GridPrediction(
+                grid_id=w.grid_id,
+                centroid=w.centroid,
+                precipitation=w.precipitation,
+                temperature=w.temperature,
+                dewpoint=w.dewpoint,
+                fire_probability=round(float(prob) * 100, 2),
+                risk_level=risk,
+            )
+        )
+
+    return output
+
+@app.get("/grid-predict", response_model=GridPredictionResponse)
+async def get_grid_predict():
+    weather_payload = await get_grid_weather()
+    preds = run_batch_inference(weather_payload.cells)
+
+    return GridPredictionResponse(
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        cell_count=len(preds),
+        prediction_window="72 Hours",
+        weather_source=weather_payload.weather_source,
+        cells=preds,
+    )
+
+# Architecture
+"""
+GET /grid-predict 
+-> calls get_grid_weather 
+    -> generate_bc_grid 
+        -> generates the geometry for each grid
+        -> chunks cells 
+    -> fetches weather per batch
+    > returns weather per cell
+    -> feeds each cell into the prediction model
+        -> returns weather + probability + risk level per cell
+"""
+
+# For testing
+@app.post("/predict-batch")
+async def predict_batch(data: List[ForecastInput]):
+    if not data:
+        raise HTTPException(status_code=400, detail="Input list is empty")
+
+    rows = [
+        GridWeather(
+            grid_id=f"manual-{i}",
+            centroid=GridPoint(lat=0.0, lon=0.0),
+            precipitation=item.precipitation,
+            temperature=item.temperature,
+            dewpoint=item.dewpoint,
+        )
+        for i, item in enumerate(data)
+    ]
+
+    preds = run_batch_inference(rows)
+
+    return {
+        "prediction_window": "72 Hours",
+        "count": len(preds),
+        "results": [
+            {
+                "fire_probability": p.fire_probability,
+                "risk_level": p.risk_level,
+            }
+            for p in preds
+        ],
+    }
 
 @app.post("/predict")
 async def predict_wildfire(data: ForecastInput):
