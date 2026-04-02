@@ -7,6 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
+# uvicorn main:app
+# http://127.0.0.1:8000/docs
+
 # Neural Network Architecture
 class WildfireClassifier(nn.Module):
     def __init__(self, input_dim):
