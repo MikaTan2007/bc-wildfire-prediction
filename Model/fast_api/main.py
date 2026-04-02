@@ -2,12 +2,14 @@ import torch
 import torch.nn as nn
 import joblib
 import numpy as np
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import List
+import asyncio
+import httpx
 
 # uvicorn main:app
 # http://127.0.0.1:8000/docs
@@ -19,6 +21,11 @@ BC_MIN_LON = -139.1
 BC_MAX_LON = -114.0
 GRID_ROWS = 25
 GRID_COLS = 40
+
+WEATHER_BATCH_SIZE = 10
+WEATHER_MAX_RETRIES = 5
+WEATHER_BASE_BACKOFF_SEC = 0.5
+WEATHER_BATCH_PAUSE_SEC = 0.3
 
 # Neural Network Architecture
 class WildfireClassifier(nn.Module):
@@ -40,6 +47,8 @@ class ForecastInput(BaseModel):
     temperature: float
     dewpoint: float
 
+# Grid Generation
+
 class GridPoint(BaseModel):
     lat: float
     lon: float
@@ -57,6 +66,21 @@ class GridResponse(BaseModel):
     rows: int
     cols: int
     cells: List[GridCell]
+
+# Grid Weather Response
+
+class GridWeather(BaseModel):
+    grid_id: str
+    centroid: GridPoint
+    precipitation: float
+    temperature: float
+    dewpoint: float
+
+class GridWeatherResponse(BaseModel):
+    generated_at: str
+    cell_count: int
+    weather_source: str
+    cells: List[GridWeather]
 
 def generate_bc_grid(rows: int = GRID_ROWS, cols: int = GRID_COLS) -> List[GridCell]:
     lat_step = (BC_MAX_LAT - BC_MIN_LAT) / rows
@@ -78,8 +102,8 @@ def generate_bc_grid(rows: int = GRID_ROWS, cols: int = GRID_COLS) -> List[GridC
             polygon = [
                 GridPoint(lat = cell_min_lat, lon = cell_min_lon),
                 GridPoint(lat = cell_min_lat, lon = cell_max_lon),
-                GridPoint(lat = cell_max_lat, lon = cell_min_lon),
                 GridPoint(lat = cell_max_lat, lon = cell_max_lon),
+                GridPoint(lat = cell_max_lat, lon = cell_min_lon),
                 GridPoint(lat = cell_min_lat, lon = cell_min_lon)
             ]
 
@@ -145,6 +169,8 @@ async def root():
         "device": str(ml_assets.get("device"))
     }
 
+# Grid Generation
+
 @app.get("/grid", response_model = GridResponse)
 async def get_grid():
     cells = generate_bc_grid(rows = GRID_ROWS, cols = GRID_COLS)
@@ -155,6 +181,107 @@ async def get_grid():
         cols = GRID_COLS,
         cells = cells
     )
+
+# Fetching Weather Per Point
+async def fetch_weather_for_batch(client: httpx.AsyncClient, batch: List[GridCell]) -> List[GridWeather]:
+    lat_csv = ",".join(str(cell.centroid.lat) for cell in batch)
+    lon_csv = ",".join(str(cell.centroid.lon) for cell in batch)
+
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat_csv,
+        "longitude": lon_csv,
+        "daily": ["temperature_2m_max", "precipitation_sum"],
+        "hourly": ["dew_point_2m"],
+        "forecast_days": 1,
+        "timezone": "UTC",
+        "cell_selection": "nearest",
+    }
+
+    last_error_text = ""
+
+    for attempt in range(WEATHER_MAX_RETRIES):
+        resp = await client.get(url, params=params)
+
+        if resp.status_code == 429:
+            wait_sec = WEATHER_BASE_BACKOFF_SEC * (2 ** attempt)
+            await asyncio.sleep(wait_sec)
+            last_error_text = resp.text
+            continue
+
+        if resp.status_code >= 400:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Open-Meteo upstream error {resp.status_code}: {resp.text}",
+            )
+
+        payload = resp.json()
+
+        # Open-Meteo can return dict for single location, list for multiple
+        payload_list = [payload] if isinstance(payload, dict) else payload
+
+        if len(payload_list) != len(batch):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Open-Meteo returned {len(payload_list)} locations for batch size {len(batch)}",
+            )
+
+        out: List[GridWeather] = []
+        for cell, wx in zip(batch, payload_list):
+            daily = wx.get("daily", {})
+            hourly = wx.get("hourly", {})
+            dew_series = hourly.get("dew_point_2m", [])
+
+            if not dew_series:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Missing dew_point_2m for grid {cell.grid_id}",
+                )
+
+            out.append(
+                GridWeather(
+                    grid_id=cell.grid_id,
+                    centroid=cell.centroid,
+                    precipitation=float(daily["precipitation_sum"][0]),
+                    temperature=float(daily["temperature_2m_max"][0]),
+                    dewpoint=float(sum(dew_series) / len(dew_series)),
+                )
+            )
+
+        return out
+
+    raise HTTPException(
+        status_code=503,
+        detail=f"Open-Meteo rate limited after retries: {last_error_text}",
+    )
+
+def chunk_cells(cells: List[GridCell], size: int) -> List[List[GridCell]]:
+    return [cells[i:i + size] for i in range(0, len(cells), size)]
+
+@app.get("/grid-weather", response_model=GridWeatherResponse)
+async def get_grid_weather():
+    cells = generate_bc_grid(rows=GRID_ROWS, cols=GRID_COLS)
+
+    timeout = httpx.Timeout(30.0)
+    limits = httpx.Limits(max_connections=10, max_keepalive_connections=10)
+
+    enriched: List[GridWeather] = []
+
+    async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
+        batches = chunk_cells(cells, WEATHER_BATCH_SIZE)
+
+        for batch in batches:
+            batch_weather = await fetch_weather_for_batch(client, batch)
+            enriched.extend(batch_weather)
+            await asyncio.sleep(WEATHER_BATCH_PAUSE_SEC)
+
+    return GridWeatherResponse(
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        cell_count=len(enriched),
+        weather_source="open-meteo",
+        cells=enriched,
+    )
+    
 
 @app.post("/predict")
 async def predict_wildfire(data: ForecastInput):
