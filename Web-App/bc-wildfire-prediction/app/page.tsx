@@ -1,7 +1,14 @@
-import Image from "next/image";
+"use client";
+import dynamic from "next/dynamic";
+
+const WildfireMap = dynamic(() => import ("./components/WildfireMap"), {
+  ssr: false
+});
 
 export default function Home() {
   return (
-    <div></div>
+    <main className = "page-root">
+      <WildfireMap></WildfireMap>
+    </main>
   );
 }

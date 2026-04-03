@@ -10,6 +10,11 @@ from datetime import datetime, timezone
 from typing import List
 import asyncio
 import httpx
+import time
+import json
+from pathlib import Path
+from shapely.geometry import Point, Polygon, shape
+from shapely.prepared import prep
 
 # uvicorn main:app
 # http://127.0.0.1:8000/docs
@@ -22,10 +27,10 @@ BC_MAX_LON = -114.0
 GRID_ROWS = 25
 GRID_COLS = 40
 
-WEATHER_BATCH_SIZE = 10
-WEATHER_MAX_RETRIES = 5
-WEATHER_BASE_BACKOFF_SEC = 0.5
-WEATHER_BATCH_PAUSE_SEC = 0.5
+WEATHER_BATCH_SIZE = 25
+WEATHER_MAX_RETRIES = 6
+WEATHER_BASE_BACKOFF_SEC = 0.75
+WEATHER_BATCH_PAUSE_SEC = 0.2
 
 # Neural Network Architecture
 class WildfireClassifier(nn.Module):
@@ -72,6 +77,7 @@ class GridResponse(BaseModel):
 class GridWeather(BaseModel):
     grid_id: str
     centroid: GridPoint
+    polygon: List[GridPoint]
     precipitation: float
     temperature: float
     dewpoint: float
@@ -85,6 +91,7 @@ class GridWeatherResponse(BaseModel):
 class GridPrediction(BaseModel):
     grid_id: str
     centroid: GridPoint
+    polygon: List[GridPoint]
     precipitation: float
     temperature: float
     dewpoint: float
@@ -98,10 +105,23 @@ class GridPredictionResponse(BaseModel):
     weather_source: str
     cells: List[GridPrediction]
 
-def generate_bc_grid(rows: int = GRID_ROWS, cols: int = GRID_COLS) -> List[GridCell]:
+
+GRID_PREDICT_CACHE_TTL_SEC = 600  # 10 minutes
+grid_predict_cache = {
+    "generated_at_epoch": 0.0,
+    "payload": None,
+}
+
+def generate_bc_grid(
+    rows: int = GRID_ROWS,
+    cols: int = GRID_COLS,
+    min_land_overlap: float = 0.15,  # keep cell if >=15% overlaps BC land
+) -> List[GridCell]:
     lat_step = (BC_MAX_LAT - BC_MIN_LAT) / rows
     lon_step = (BC_MAX_LON - BC_MIN_LON) / cols
     cells: List[GridCell] = []
+
+    bc_geom = ml_assets.get("bc_land_geom")
 
     for r in range(rows):
         for c in range(cols):
@@ -111,28 +131,40 @@ def generate_bc_grid(rows: int = GRID_ROWS, cols: int = GRID_COLS) -> List[GridC
             cell_max_lon = cell_min_lon + lon_step
 
             centroid = GridPoint(
-                lat = (cell_min_lat + cell_max_lat) / 2.0,
-                lon = (cell_min_lon + cell_max_lon) / 2.0
+                lat=(cell_min_lat + cell_max_lat) / 2.0,
+                lon=(cell_min_lon + cell_max_lon) / 2.0,
             )
 
             polygon = [
-                GridPoint(lat = cell_min_lat, lon = cell_min_lon),
-                GridPoint(lat = cell_min_lat, lon = cell_max_lon),
-                GridPoint(lat = cell_max_lat, lon = cell_max_lon),
-                GridPoint(lat = cell_max_lat, lon = cell_min_lon),
-                GridPoint(lat = cell_min_lat, lon = cell_min_lon)
+                GridPoint(lat=cell_min_lat, lon=cell_min_lon),
+                GridPoint(lat=cell_min_lat, lon=cell_max_lon),
+                GridPoint(lat=cell_max_lat, lon=cell_max_lon),
+                GridPoint(lat=cell_max_lat, lon=cell_min_lon),
+                GridPoint(lat=cell_min_lat, lon=cell_min_lon),
             ]
+
+            # Land filtering
+            if bc_geom is not None:
+                cell_poly = Polygon([
+                    (cell_min_lon, cell_min_lat),
+                    (cell_max_lon, cell_min_lat),
+                    (cell_max_lon, cell_max_lat),
+                    (cell_min_lon, cell_max_lat),
+                ])
+                overlap_ratio = cell_poly.intersection(bc_geom).area / cell_poly.area
+                if overlap_ratio < min_land_overlap:
+                    continue
 
             cells.append(
                 GridCell(
-                    grid_id = f"bc-r{r:02d}-c{c:02d}",
-                    row = r,
-                    col = c,
-                    centroid = centroid,
-                    polygon = polygon
+                    grid_id=f"bc-r{r:02d}-c{c:02d}",
+                    row=r,
+                    col=c,
+                    centroid=centroid,
+                    polygon=polygon,
                 )
             )
-    
+
     return cells
 
 # Defining Lifespan Context Manager
@@ -247,7 +279,10 @@ async def fetch_weather_for_batch(client: httpx.AsyncClient, batch: List[GridCel
         for cell, wx in zip(batch, payload_list):
             daily = wx.get("daily", {})
             hourly = wx.get("hourly", {})
-            dew_series = hourly.get("dew_point_2m", [])
+            precip_series = daily.get("precipitation_sum", [])
+            temp_series = daily.get("temperature_2m_max", [])
+            dew_series_raw = hourly.get("dew_point_2m", [])
+            dew_series = [d for d in dew_series_raw if d is not None]
 
             if not dew_series:
                 raise HTTPException(
@@ -259,8 +294,9 @@ async def fetch_weather_for_batch(client: httpx.AsyncClient, batch: List[GridCel
                 GridWeather(
                     grid_id=cell.grid_id,
                     centroid=cell.centroid,
-                    precipitation=float(daily["precipitation_sum"][0]),
-                    temperature=float(daily["temperature_2m_max"][0]),
+                    polygon=cell.polygon,
+                    precipitation=_first_valid_float(precip_series, "precipitation_sum", cell.grid_id),
+                    temperature=_first_valid_float(temp_series, "temperature_2m_max", cell.grid_id),
                     dewpoint=float(sum(dew_series) / len(dew_series)),
                 )
             )
@@ -274,6 +310,15 @@ async def fetch_weather_for_batch(client: httpx.AsyncClient, batch: List[GridCel
 
 def chunk_cells(cells: List[GridCell], size: int) -> List[List[GridCell]]:
     return [cells[i:i + size] for i in range(0, len(cells), size)]
+
+
+def _first_valid_float(series, field_name: str, grid_id: str) -> float:
+    if not series or series[0] is None:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Missing {field_name} for grid {grid_id}",
+        )
+    return float(series[0])
 
 @app.get("/grid-weather", response_model=GridWeatherResponse)
 async def get_grid_weather():
@@ -325,6 +370,7 @@ def run_batch_inference(weather_rows: List[GridWeather]) -> List[GridPrediction]
             GridPrediction(
                 grid_id=w.grid_id,
                 centroid=w.centroid,
+                polygon=w.polygon,
                 precipitation=w.precipitation,
                 temperature=w.temperature,
                 dewpoint=w.dewpoint,
@@ -337,16 +383,25 @@ def run_batch_inference(weather_rows: List[GridWeather]) -> List[GridPrediction]
 
 @app.get("/grid-predict", response_model=GridPredictionResponse)
 async def get_grid_predict():
+    now = time.time()
+    cache_age = now - float(grid_predict_cache["generated_at_epoch"])
+    if grid_predict_cache["payload"] is not None and cache_age < GRID_PREDICT_CACHE_TTL_SEC:
+        return grid_predict_cache["payload"]
+
     weather_payload = await get_grid_weather()
     preds = run_batch_inference(weather_payload.cells)
 
-    return GridPredictionResponse(
+    payload = GridPredictionResponse(
         generated_at=datetime.now(timezone.utc).isoformat(),
         cell_count=len(preds),
         prediction_window="72 Hours",
         weather_source=weather_payload.weather_source,
         cells=preds,
     )
+
+    grid_predict_cache["generated_at_epoch"] = now
+    grid_predict_cache["payload"] = payload
+    return payload
 
 # Architecture
 """
@@ -372,6 +427,7 @@ async def predict_batch(data: List[ForecastInput]):
             grid_id=f"manual-{i}",
             centroid=GridPoint(lat=0.0, lon=0.0),
             precipitation=item.precipitation,
+            polygon = [],
             temperature=item.temperature,
             dewpoint=item.dewpoint,
         )
@@ -417,3 +473,18 @@ async def predict_wildfire(data: ForecastInput):
         "risk_level": "High" if probability > 0.75 else "Moderate" if probability > 0.4 else "Low",
         "unit": "Percentage"
     }
+
+boundary_path = Path(__file__).parent / "data" / "bc_land.geojson"
+with open(boundary_path, "r", encoding="utf-8") as f:
+    geo = json.load(f)
+
+# Handles FeatureCollection or single Feature
+if geo.get("type") == "FeatureCollection":
+    bc_geom = shape(geo["features"][0]["geometry"])
+elif geo.get("type") == "Feature":
+    bc_geom = shape(geo["geometry"])
+else:
+    bc_geom = shape(geo)
+
+ml_assets["bc_land_geom"] = bc_geom
+ml_assets["bc_land_prepared"] = prep(bc_geom)
