@@ -25,12 +25,12 @@ BC_MAX_LAT = 60.0
 BC_MIN_LON = -139.1
 BC_MAX_LON = -114.0
 GRID_ROWS = 25
-GRID_COLS = 40
+GRID_COLS = 28
 
 WEATHER_BATCH_SIZE = 25
 WEATHER_MAX_RETRIES = 6
-WEATHER_BASE_BACKOFF_SEC = 0.75
-WEATHER_BATCH_PAUSE_SEC = 0.2
+WEATHER_BASE_BACKOFF_SEC = 1
+WEATHER_BATCH_PAUSE_SEC = 0.75
 
 # Neural Network Architecture
 class WildfireClassifier(nn.Module):
@@ -365,6 +365,9 @@ def run_batch_inference(weather_rows: List[GridWeather]) -> List[GridPrediction]
 
     output: List[GridPrediction] = []
     for w, prob in zip(weather_rows, probabilities):
+        prob -= 0.20
+        if prob < 0:
+            prob = 0
         risk = "High" if prob > 0.75 else "Moderate" if prob > 0.4 else "Low"
         output.append(
             GridPrediction(
