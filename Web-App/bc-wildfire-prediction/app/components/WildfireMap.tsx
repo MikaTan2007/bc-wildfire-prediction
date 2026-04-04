@@ -99,7 +99,6 @@ export default function WildfireMap() {
     <div className="map-page">
       <div className="header">
         <h1>Wildfire Prediction in British Columbia within the next 72-Hours</h1>
-        <h2>This interactive map shows locations in BC with the conditions for a wildfire within the next 72-hours.</h2>
         <h3>
             Model trained on 60k+ points of data from the Canadian Wildland Fire Information System (CWFIS), with weather data extracted from GEE's ERA5-Land Daily Aggregated dataset.
         </h3>
